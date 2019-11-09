@@ -15,10 +15,36 @@ how to use the page table and disk interfaces.
 #include <string.h>
 #include <errno.h>
 
+struct node;
+
+struct flist;
+
+struct node{
+	int frame;
+	struct node* next;
+};
+
+struct flist{
+	struct node* head;
+	struct node* tail;
+	int* free;
+	
+};
+
+
+void flist_init(int nframes, struct flist* fl){
+	fl->head = NULL;
+	fl->tail = NULL;
+	fl->free = malloc(nframes * sizeof(int));
+	//initialize free
+	memset(fl->free, 0, nframes * sizeof(int));
+}
+
 void page_fault_handler( struct page_table *pt, int page )
 {
-	printf("page fault on page #%d\n",page);
-	exit(1);
+	//start my code here
+	page_table_set_entry(pt, page, page, PROT_READ|PROT_WRITE);
+	//exit(1);
 }
 
 int main( int argc, char *argv[] )

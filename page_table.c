@@ -117,6 +117,14 @@ void page_table_set_entry( struct page_table *pt, int page, int frame, int bits 
 	mprotect(pt->virtmem+page*PAGE_SIZE,PAGE_SIZE,bits);
 }
 
+// start code here
+int remap_file_pages(void *addr, size_t size, int prot,
+                            size_t pgoff, int flags){
+	;			    
+
+
+}
+
 void page_table_get_entry( struct page_table *pt, int page, int *frame, int *bits )
 {
 	if( page<0 || page>=pt->npages ) {
