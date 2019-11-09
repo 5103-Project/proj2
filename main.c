@@ -79,6 +79,7 @@ void setHold(int frame, int page){
 	}
 	
 	if(!strcmp(replaceMethod, "fifo")){
+		
 	}
 }
 
@@ -120,6 +121,13 @@ void evict(struct page_table *pt){
 		int frame = expired->frame;
 		FL->free[frame] = FREE;
 		
+	}else if(!strcmp(replaceMethod, "lifo")){	
+		int frame = FL->tail->frame;
+		FL->free[frame] = FREE;
+		//if(!strcmp(replaceMethod, "fifo")){
+		expired = FL->tail;
+		FL->tail = expired->pre;
+		FL->tail->next = NULL;
 	}
 	page_table_set_entry(pt, expired->page, 0, 0);
 	free(expired);
