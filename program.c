@@ -55,11 +55,10 @@ void sort_program( char *data, int length )
 	int i;
 
 	srand(4856);
-
 	for(i=0;i<length;i++) {
 		data[i] = rand();
 	}
-
+	
 	qsort(data,length,1,compare_bytes);
 
 	for(i=0;i<length;i++) {

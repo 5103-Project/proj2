@@ -18,16 +18,23 @@ how to use the page table and disk interfaces.
 
 #define FREE 0
 #define TAKEN 1
+#define THRESHOLD 6
 
+int diskr_cnt;
+int diskw_cnt;
+int pagefault_cnt;
 struct node;
 
 struct flist;
+
+struct disk *disk;
 
 struct node{
 	int frame;
 	struct node* next;
 	struct node* pre;
 	int page;
+	int cnt; //used to implement LRU in replacement policy
 };
 
 struct flist{
@@ -35,7 +42,7 @@ struct flist{
 	struct node* tail;
 	int* free;
 	int nframes;
-	
+	int freeframes;
 };
 
 
@@ -45,6 +52,7 @@ static const char* replaceMethod;
 
 void flist_init(int nframes, struct flist* fl){
 	fl->nframes = nframes;
+	fl->freeframes = nframes;
 	fl->head = NULL;
 	fl->tail = NULL;
 	fl->free = malloc(nframes * sizeof(int));
@@ -54,7 +62,7 @@ void flist_init(int nframes, struct flist* fl){
 
 int nextFree(){
 	for(int i = 0; i < FL->nframes; i++){
-		if(FL->free[i] == FREE){
+		if(FL->free[i] == FREE){	
 			return i;
 		}
 	}	
@@ -66,6 +74,8 @@ void setHold(int frame, int page){
 	//fifo
 	struct node* new = malloc(sizeof(struct node));
 	new->page = page;
+	new->cnt = 0;
+	new->frame = frame;
 	if(FL->head == NULL){
 		FL->head = new;
 		FL->tail = new;
@@ -77,86 +87,149 @@ void setHold(int frame, int page){
 		new->next = NULL;
 		FL->tail = new;
 	}
-	
-	if(!strcmp(replaceMethod, "fifo")){
-		
+	if(FL->freeframes>0){
+		FL->freeframes--;
 	}
 }
 
+void clock_cnt(struct page_table *pt){
+	struct node *tmp = FL->head;
+	for(int i = 0 ; i < (FL->nframes - FL->freeframes); i++){
+		if(pt->page_bits[tmp->page] & PROT_WRITE){
+			tmp->cnt = 0;
+		}
+		else{
+			tmp->cnt++;
+		}
+		tmp = tmp->next;
+	}
+}
 
-void evict(struct page_table *pt){
+struct node* rand_node(){
+	int idx = rand() % FL->nframes;
+	struct node *evict_node = FL->head;
+	for(int i = 0; i < idx; i++){
+		evict_node = evict_node->next;
+	}
+	return evict_node;
+}
 
-	struct node* expired;
-	if(!strcmp(replaceMethod, "fifo")){
-		int frame = FL->head->frame;
-		FL->free[frame] = FREE;
-		//if(!strcmp(replaceMethod, "fifo")){
-		expired = FL->head;
-		FL->head = expired->next;
+struct node* clock_node(){
+	struct node* tmp = FL->head;
+	struct node* evict_frame = FL->head;
+	for(int i = 0; i < FL->nframes; i++){
+		if(tmp->cnt >= THRESHOLD){
+			evict_frame = tmp;
+			return evict_frame;
+		}
+		tmp = tmp->next;
+	}
+	evict_frame = rand_node();
+	return evict_frame;
+}
+
+struct node* fifo_node(){
+	return FL->head;
+}
+
+void remove_node(struct node* evict_node){
+	if(evict_node == FL->head){
+		FL->head = evict_node->next;
 		FL->head->pre = NULL;
-	}else if(!strcmp(replaceMethod, "rand")){
-		int idx = rand() % FL->nframes;
-		expired = FL->head;
-		for(int i = 0; i < idx; i++){
-			expired = expired->next;
-		}
-
-		if(expired == FL->head){
-			FL->head = expired->next;
-		}
-
-		if(expired == FL->tail){
-			FL->tail = expired->pre;
-		}
-
-		//remove expired from FL
-		struct node* tempPre = expired->pre;
-		struct node* tempPost = expired->next;
-		if(tempPre != NULL){
-			tempPre->next = tempPost;
-		}
-		if(tempPost != NULL){
-			tempPost->pre = tempPre;
-		}
-		int frame = expired->frame;
-		FL->free[frame] = FREE;
-		
-	}else if(!strcmp(replaceMethod, "lifo")){	
-		int frame = FL->tail->frame;
-		FL->free[frame] = FREE;
-		//if(!strcmp(replaceMethod, "fifo")){
-		expired = FL->tail;
-		FL->tail = expired->pre;
-		FL->tail->next = NULL;
+		FL->free[evict_node->frame] = FREE;
 	}
-	page_table_set_entry(pt, expired->page, 0, 0);
-	free(expired);
+	else if(evict_node == FL->tail){
+		FL->tail = evict_node->pre;
+		FL->tail->next = NULL;
+		FL->free[evict_node->frame] = FREE;
+	}
+	else{
+		struct node* tempPre = evict_node->pre;
+		struct node* tempNext = evict_node->next;
+		if(tempPre != NULL){
+			tempPre->next = tempNext;
+		}
+		if(tempNext != NULL){
+			tempNext->pre = tempPre;
+		}
+		FL->free[evict_node->frame] = FREE;
+	}
 }
 
-int replace(struct page_table *pt, int page){
-	evict(pt);
-	int idx = nextFree();
-	setHold(idx, page);
-	return idx;
+void write_dirty(struct page_table *pt,struct node *evict_node, int *diskw_cnt){
+	int frame = evict_node->frame;
+	int page = evict_node->page;
+	if(pt->page_bits[page] & PROT_WRITE){
+			disk_write(disk,page,&(pt->physmem[frame*PAGE_SIZE]));
+			(*diskw_cnt)++;
+	}
 }
+
+void evict(struct page_table *pt, int *diskw_cnt){
+
+	struct node* evict_node;
+	if(!strcmp(replaceMethod, "fifo")){
+		evict_node = fifo_node();	
+	}
+	else if(!strcmp(replaceMethod, "rand")){
+		evict_node = rand_node();	
+	}
+	else if(!strcmp(replaceMethod, "clock")){
+		evict_node = clock_node();
+	}
+	write_dirty(pt,evict_node,diskw_cnt);
+	remove_node(evict_node);
+	page_table_set_entry(pt, evict_node->page, 0, 0);
+	free(evict_node);
+}
+
+void diskToMem(struct page_table *pt,int frame, int page){
+	setHold(frame, page);
+	page_table_set_entry(pt, page, frame, PROT_READ);
+	disk_read(disk,page,&(pt->physmem[frame*PAGE_SIZE]));
+	diskr_cnt++;
+}
+
+/*void print(){
+	printf("print\n");
+	struct node *tmp = FL->head;
+	print("clock cnt\n");
+	for(int i = 0; i < (FL->nframes - FL->freeframes); i++){
+		if(tmp != NULL){
+			printf("%d(%d) ",tmp->frame, tmp->cnt);
+		}
+		
+		tmp = tmp->next;
+	}
+	printf("\n");
+}*/
 
 void page_fault_handler(struct page_table *pt, int page )
 {
-	//start my code here
-	printf("page falue on page# %d\n", page);
-	// write operation
+	//if the page bit is PROT_READ which means the page is already in physical memory, just add PROT_WRITE bit
+	pagefault_cnt++;
+	int frame;
 	if(pt->page_bits[page] & PROT_READ){
-		page_table_set_entry(pt, page, pt->page_mapping[page], PROT_READ | PROT_WRITE);	
+		frame = pt->page_mapping[page];
+		page_table_set_entry(pt, page, frame, PROT_READ | PROT_WRITE);	
 	}
+	//page is not in physical memory, have to read data from disk
 	else{
-		int idx = nextFree();
-		if(idx != -1){
-			setHold(idx, page);	
-			page_table_set_entry(pt, page, idx, PROT_READ);
-		}else{
-			int frame = replace(pt, page);
-			page_table_set_entry(pt, page, frame, PROT_READ);
+		frame = nextFree();
+		//there are still free frames, read from disk
+		if(frame != -1){
+			diskToMem(pt, frame, page);
 		}
+		//there is no free frames, evict one and write back to disk if it is dirty and then read from disk
+		else{
+			evict(pt,&diskw_cnt);
+			frame = nextFree();
+			diskToMem(pt, frame, page);
+		}
+	}
+	if(!strcmp(replaceMethod, "clock")){
+		clock_cnt(pt);
+		//print();
 	}
 }
 
@@ -173,12 +246,14 @@ int main( int argc, char *argv[] )
 	replaceMethod = argv[3];
 	const char *program = argv[4];
 
-	struct disk *disk = disk_open("myvirtualdisk",npages);
+	disk = disk_open("myvirtualdisk",npages);
 	if(!disk) {
 		fprintf(stderr,"couldn't create virtual disk: %s\n",strerror(errno));
 		return 1;
 	}
 
+	diskr_cnt = 0;
+	diskw_cnt = 0;
 
 	struct page_table *pt = page_table_create( npages, nframes, page_fault_handler );
 	if(!pt) {
@@ -209,6 +284,12 @@ int main( int argc, char *argv[] )
 
 	page_table_delete(pt);
 	disk_close(disk);
-
+	/*FILE *fp;
+	fp = fopen("result.csv", "a");
+	fprintf(fp, "%d,%d,%d\n", pagefault_cnt, diskr_cnt, diskw_cnt);
+	fclose(fp);*/
+	printf("page fault: %d \n", pagefault_cnt);
+	printf("disk read: %d \n",diskr_cnt);
+	printf("disk write: %d \n", diskw_cnt);
 	return 0;
 }
