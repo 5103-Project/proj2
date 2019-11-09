@@ -14,6 +14,7 @@ how to use the page table and disk interfaces.
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include<time.h> 
 
 #define FREE 0
 #define TAKEN 1
@@ -78,18 +79,48 @@ void setHold(int frame, int page){
 	}
 	
 	if(!strcmp(replaceMethod, "fifo")){
-		;
 	}
 }
 
 
 void evict(struct page_table *pt){
-	int frame = FL->head->frame;
-	FL->free[frame] = FREE;
-	//if(!strcmp(replaceMethod, "fifo")){
-	struct node* expired = FL->head;
-	FL->head = expired->next;
-	FL->head->pre = NULL;
+
+	struct node* expired;
+	if(!strcmp(replaceMethod, "fifo")){
+		int frame = FL->head->frame;
+		FL->free[frame] = FREE;
+		//if(!strcmp(replaceMethod, "fifo")){
+		expired = FL->head;
+		FL->head = expired->next;
+		FL->head->pre = NULL;
+	}else if(!strcmp(replaceMethod, "rand")){
+		int idx = rand() % FL->nframes;
+		expired = FL->head;
+		for(int i = 0; i < idx; i++){
+			expired = expired->next;
+		}
+
+		if(expired == FL->head){
+			FL->head = expired->next;
+		}
+
+		if(expired == FL->tail){
+			FL->tail = expired->pre;
+		}
+
+		//remove expired from FL
+		struct node* tempPre = expired->pre;
+		struct node* tempPost = expired->next;
+		if(tempPre != NULL){
+			tempPre->next = tempPost;
+		}
+		if(tempPost != NULL){
+			tempPost->pre = tempPre;
+		}
+		int frame = expired->frame;
+		FL->free[frame] = FREE;
+		
+	}
 	page_table_set_entry(pt, expired->page, 0, 0);
 	free(expired);
 }
@@ -123,6 +154,7 @@ void page_fault_handler(struct page_table *pt, int page )
 
 int main( int argc, char *argv[] )
 {
+	srand(time(0));
 	if(argc!=5) {
 		printf("use: virtmem <npages> <nframes> <rand|fifo|custom> <sort|scan|focus>\n");
 		return 1;
