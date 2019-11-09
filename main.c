@@ -15,6 +15,9 @@ how to use the page table and disk interfaces.
 #include <string.h>
 #include <errno.h>
 
+#define FREE 0
+#define TAKEN 1
+
 struct node;
 
 struct flist;
@@ -22,17 +25,25 @@ struct flist;
 struct node{
 	int frame;
 	struct node* next;
+	struct node* pre;
+	int page;
 };
 
 struct flist{
 	struct node* head;
 	struct node* tail;
 	int* free;
+	int nframes;
 	
 };
 
 
+struct flist* FL;
+
+static const char* replaceMethod;
+
 void flist_init(int nframes, struct flist* fl){
+	fl->nframes = nframes;
 	fl->head = NULL;
 	fl->tail = NULL;
 	fl->free = malloc(nframes * sizeof(int));
@@ -40,11 +51,74 @@ void flist_init(int nframes, struct flist* fl){
 	memset(fl->free, 0, nframes * sizeof(int));
 }
 
-void page_fault_handler( struct page_table *pt, int page )
+int nextFree(){
+	for(int i = 0; i < FL->nframes; i++){
+		if(FL->free[i] == FREE){
+			return i;
+		}
+	}	
+	return -1;
+}
+
+void setHold(int frame, int page){
+	FL->free[frame] = TAKEN;
+	//fifo
+	struct node* new = malloc(sizeof(struct node));
+	new->page = page;
+	if(FL->head == NULL){
+		FL->head = new;
+		FL->tail = new;
+		new->pre = NULL;
+		new->next = NULL;
+	}else{
+		new->pre = FL->tail;
+		FL->tail->next = new;
+		new->next = NULL;
+		FL->tail = new;
+	}
+	
+	if(!strcmp(replaceMethod, "fifo")){
+		;
+	}
+}
+
+
+void evict(struct page_table *pt){
+	int frame = FL->head->frame;
+	FL->free[frame] = FREE;
+	//if(!strcmp(replaceMethod, "fifo")){
+	struct node* expired = FL->head;
+	FL->head = expired->next;
+	FL->head->pre = NULL;
+	page_table_set_entry(pt, expired->page, 0, 0);
+	free(expired);
+}
+
+int replace(struct page_table *pt, int page){
+	evict(pt);
+	int idx = nextFree();
+	setHold(idx, page);
+	return idx;
+}
+
+void page_fault_handler(struct page_table *pt, int page )
 {
 	//start my code here
-	page_table_set_entry(pt, page, page, PROT_READ|PROT_WRITE);
-	//exit(1);
+	printf("page falue on page# %d\n", page);
+	// write operation
+	if(pt->page_bits[page] & PROT_READ){
+		page_table_set_entry(pt, page, pt->page_mapping[page], PROT_READ | PROT_WRITE);	
+	}
+	else{
+		int idx = nextFree();
+		if(idx != -1){
+			setHold(idx, page);	
+			page_table_set_entry(pt, page, idx, PROT_READ);
+		}else{
+			int frame = replace(pt, page);
+			page_table_set_entry(pt, page, frame, PROT_READ);
+		}
+	}
 }
 
 int main( int argc, char *argv[] )
@@ -56,6 +130,7 @@ int main( int argc, char *argv[] )
 
 	int npages = atoi(argv[1]);
 	int nframes = atoi(argv[2]);
+	replaceMethod = argv[3];
 	const char *program = argv[4];
 
 	struct disk *disk = disk_open("myvirtualdisk",npages);
@@ -74,6 +149,9 @@ int main( int argc, char *argv[] )
 	char *virtmem = page_table_get_virtmem(pt);
 
 	char *physmem = page_table_get_physmem(pt);
+
+	FL = malloc(sizeof(struct flist));
+	flist_init(nframes, FL);
 
 	if(!strcmp(program,"sort")) {
 		sort_program(virtmem,npages*PAGE_SIZE);
