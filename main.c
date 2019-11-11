@@ -23,10 +23,13 @@ how to use the page table and disk interfaces.
 int diskr_cnt;
 int diskw_cnt;
 int pagefault_cnt;
+int npages;
+int nframes;
+const char* replaceMethod;
+const char *program;
 struct node;
-
 struct flist;
-
+struct flist* FL;
 struct disk *disk;
 
 struct node{
@@ -34,7 +37,7 @@ struct node{
 	struct node* next;
 	struct node* pre;
 	int page;
-	int cnt; //used to implement LRU in replacement policy
+	int cnt; //used to implement clock algorithm in replacement policy
 };
 
 struct flist{
@@ -44,11 +47,6 @@ struct flist{
 	int nframes;
 	int freeframes;
 };
-
-
-struct flist* FL;
-
-static const char* replaceMethod;
 
 void flist_init(int nframes, struct flist* fl){
 	fl->nframes = nframes;
@@ -71,7 +69,6 @@ int nextFree(){
 
 void setHold(int frame, int page){
 	FL->free[frame] = TAKEN;
-	//fifo
 	struct node* new = malloc(sizeof(struct node));
 	new->page = page;
 	new->cnt = 0;
@@ -135,12 +132,16 @@ struct node* fifo_node(){
 void remove_node(struct node* evict_node){
 	if(evict_node == FL->head){
 		FL->head = evict_node->next;
-		FL->head->pre = NULL;
+		if(FL->head != NULL){
+			FL->head->pre = NULL;
+		}		
 		FL->free[evict_node->frame] = FREE;
 	}
 	else if(evict_node == FL->tail){
 		FL->tail = evict_node->pre;
-		FL->tail->next = NULL;
+		if(FL->tail != NULL){
+			FL->tail->next = NULL;
+		}		
 		FL->free[evict_node->frame] = FREE;
 	}
 	else{
@@ -190,20 +191,6 @@ void diskToMem(struct page_table *pt,int frame, int page){
 	diskr_cnt++;
 }
 
-/*void print(){
-	printf("print\n");
-	struct node *tmp = FL->head;
-	print("clock cnt\n");
-	for(int i = 0; i < (FL->nframes - FL->freeframes); i++){
-		if(tmp != NULL){
-			printf("%d(%d) ",tmp->frame, tmp->cnt);
-		}
-		
-		tmp = tmp->next;
-	}
-	printf("\n");
-}*/
-
 void page_fault_handler(struct page_table *pt, int page )
 {
 	//if the page bit is PROT_READ which means the page is already in physical memory, just add PROT_WRITE bit
@@ -229,31 +216,30 @@ void page_fault_handler(struct page_table *pt, int page )
 	}
 	if(!strcmp(replaceMethod, "clock")){
 		clock_cnt(pt);
-		//print();
 	}
 }
 
 int main( int argc, char *argv[] )
-{
-	srand(time(0));
+{	
 	if(argc!=5) {
 		printf("use: virtmem <npages> <nframes> <rand|fifo|custom> <sort|scan|focus>\n");
 		return 1;
 	}
 
-	int npages = atoi(argv[1]);
-	int nframes = atoi(argv[2]);
+	diskr_cnt = 0;
+	diskw_cnt = 0;
+	pagefault_cnt = 0;
+
+	npages = atoi(argv[1]);
+	nframes = atoi(argv[2]);
 	replaceMethod = argv[3];
-	const char *program = argv[4];
+	program = argv[4];
 
 	disk = disk_open("myvirtualdisk",npages);
 	if(!disk) {
 		fprintf(stderr,"couldn't create virtual disk: %s\n",strerror(errno));
 		return 1;
 	}
-
-	diskr_cnt = 0;
-	diskw_cnt = 0;
 
 	struct page_table *pt = page_table_create( npages, nframes, page_fault_handler );
 	if(!pt) {
@@ -284,12 +270,10 @@ int main( int argc, char *argv[] )
 
 	page_table_delete(pt);
 	disk_close(disk);
-	/*FILE *fp;
-	fp = fopen("result.csv", "a");
-	fprintf(fp, "%d,%d,%d\n", pagefault_cnt, diskr_cnt, diskw_cnt);
-	fclose(fp);*/
+	printf("program: %s  replaceAlgprithm: %s\n", program, replaceMethod);	
 	printf("page fault: %d \n", pagefault_cnt);
 	printf("disk read: %d \n",diskr_cnt);
 	printf("disk write: %d \n", diskw_cnt);
+	printf("------------------------------------------------------------\n");
 	return 0;
 }
